@@ -6,21 +6,19 @@ from Crypto.Cipher import AES
 from Crypto.Util.Padding import pad
 import urllib3
 from concurrent.futures import ThreadPoolExecutor, as_completed
-import uuid
 
 urllib3.disable_warnings()
 
 app = Flask(__name__)
 CORS(app)
 
-# ==================== CONFIGURATION ====================
+# ==================== OPTIMIZATION FOR VERCEL ====================
 OPTIMIZATION = {
-    'max_workers': 100,
-    'timeout': 2,
-    'retries': 0,
-    'no_delay': True,
-    'pool_connections': 100,
-    'pool_maxsize': 100,
+    'max_workers': 10,  # Vercel limit
+    'timeout': 8,       # Must be less than Vercel timeout (10s)
+    'retries': 1,
+    'pool_connections': 10,
+    'pool_maxsize': 10,
 }
 
 # ==================== FAST IP SPOOFING ====================
@@ -30,7 +28,7 @@ class FastIPSpoofer:
     _IP_LOCK = threading.Lock()
     
     @classmethod
-    def init_ip_pool(cls, count=5000):
+    def init_ip_pool(cls, count=1000):
         if not cls._IP_POOL:
             for _ in range(count):
                 ip = f"{random.randint(1,255)}.{random.randint(1,255)}.{random.randint(1,255)}.{random.randint(1,254)}"
@@ -43,7 +41,7 @@ class FastIPSpoofer:
             cls._IP_INDEX += 1
             return ip
 
-FastIPSpoofer.init_ip_pool(5000)
+FastIPSpoofer.init_ip_pool(1000)
 
 class WAFBypass:
     _user_agents = [
@@ -57,10 +55,10 @@ class WAFBypass:
     def get_ua():
         return random.choice(WAFBypass._user_agents)
 
-# ==================== SESSION POOL ====================
+# ==================== SESSION POOL (Lighter for Vercel) ====================
 class SessionPool:
     __slots__ = ('sessions', 'current', 'lock')
-    def __init__(self, size=100):
+    def __init__(self, size=10):
         self.sessions = []
         self.current = 0
         self.lock = threading.Lock()
@@ -68,8 +66,8 @@ class SessionPool:
         for _ in range(size):
             sess = requests.Session()
             adapter = requests.adapters.HTTPAdapter(
-                pool_connections=50,
-                pool_maxsize=50,
+                pool_connections=5,
+                pool_maxsize=5,
                 max_retries=0,
                 pool_block=False
             )
@@ -88,7 +86,7 @@ class SessionPool:
             self.current += 1
             return sess
 
-session_pool = SessionPool(100)
+session_pool = SessionPool(10)
 
 _H1 = "VkxSVlZVRkZWVVZBVkZWQQ=="
 _H2 = "U0dWeVZFRkZWRVZGVlVWQ0E9PQ=="
@@ -113,9 +111,6 @@ accounts_storage = {
     'couples': [],
     'ghost': []
 }
-
-generation_jobs = {}
-job_lock = threading.Lock()
 
 REGION_LANG = {"ME":"ar","IND":"hi","ID":"id","VN":"vi","TH":"th","BD":"bn","PK":"ur","TW":"zh","CIS":"ru","SAC":"es","BR":"pt"}
 HEX_KEY = bytes.fromhex("32656534343831396539623435393838343531343130363762323831363231383734643064356437616639643866376530306331653534373135623764316533")
@@ -251,6 +246,7 @@ def encrypt_api(plain_hex):
     cipher = AES.new(aes_key, AES.MODE_CBC, iv)
     return cipher.encrypt(pad(plain, AES.block_size)).hex()
 
+# ==================== CORE FUNCTIONS (LENGKAP) ====================
 def create_account(region, account_name, password_prefix, is_ghost=False):
     try:
         password = generate_custom_password(password_prefix)
@@ -277,7 +273,7 @@ def create_account(region, account_name, password_prefix, is_ghost=False):
                 uid = res_json["data"]["uid"]
                 return get_token(uid, password, region, account_name, password_prefix, is_ghost)
         return None
-    except:
+    except Exception as e:
         return None
 
 def get_token(uid, password, region, account_name, password_prefix, is_ghost=False):
@@ -308,7 +304,7 @@ def get_token(uid, password, region, account_name, password_prefix, is_ghost=Fal
             field = codecs.decode(''.join(c if 32 <= ord(c) <= 126 else f'\\u{ord(c):04x}' for c in encoded), 'unicode_escape').encode('latin1')
             return major_register(access_token, open_id, field, uid, password, region, account_name, password_prefix, is_ghost)
         return None
-    except:
+    except Exception as e:
         return None
 
 def major_register(access_token, open_id, field, uid, password, region, account_name, password_prefix, is_ghost=False):
@@ -352,11 +348,15 @@ def major_register(access_token, open_id, field, uid, password, region, account_
                 except:
                     pass
             return {
-                "uid": uid, "password": password, "name": name,
-                "region": "GHOST" if is_ghost else region, "status": "success",
-                "account_id": account_id, "jwt_token": jwt_token
+                "uid": uid, 
+                "password": password, 
+                "name": name,
+                "region": "GHOST" if is_ghost else region, 
+                "status": "success",
+                "account_id": account_id, 
+                "jwt_token": jwt_token
             }
-    except:
+    except Exception as e:
         pass
     return None
 
@@ -418,10 +418,11 @@ def major_login(uid, password, access_token, open_id, region, is_ghost=False):
                     except:
                         pass
         return {"account_id": "N/A", "jwt_token": ""}
-    except:
+    except Exception as e:
         return {"account_id": "N/A", "jwt_token": ""}
 
 def force_region_bind(region, jwt_token):
+    """Choose Region / Force Region Bind"""
     try:
         url = "https://loginbp.common.ggbluefox.com/ChooseRegion" if region.upper() in ["ME","TH"] else "https://loginbp.ggblueshark.com/ChooseRegion"
         region_code = "RU" if region.upper() == "CIS" else region.upper()
@@ -442,161 +443,14 @@ def force_region_bind(region, jwt_token):
         }
         
         sess = session_pool.get_session()
-        sess.post(url, data=payload, headers=headers, verify=False, timeout=OPTIMIZATION['timeout'])
+        response = sess.post(url, data=payload, headers=headers, verify=False, timeout=OPTIMIZATION['timeout'])
+        return response.status_code == 200
     except:
-        pass
+        return False
 
-# ==================== API ENDPOINTS ====================
-
-@app.route('/api/generate', methods=['POST'])
-def generate_accounts():
-    """Generate accounts"""
-    try:
-        data = request.json
-        
-        region = data.get('region', 'ID')
-        name_prefix = data.get('name_prefix', 'OMHP')
-        password_prefix = data.get('password_prefix', 'OMHP')
-        account_count = min(data.get('count', 10), 100)  # Max 100 for Vercel
-        thread_count = min(data.get('threads', 10), OPTIMIZATION['max_workers'])
-        is_ghost = region.upper() == 'GHOST'
-        
-        valid_regions = ['ME', 'IND', 'ID', 'VN', 'TH', 'BD', 'PK', 'TW', 'CIS', 'SAC', 'BR']
-        if not is_ghost and region.upper() not in valid_regions:
-            return jsonify({'error': f'Invalid region. Valid: {valid_regions + ["GHOST"]}'}), 400
-        
-        results = []
-        start_time = time.time()
-        
-        with ThreadPoolExecutor(max_workers=thread_count) as executor:
-            futures = []
-            for i in range(account_count):
-                future = executor.submit(
-                    generate_single_account_api,
-                    region if not is_ghost else 'BD',
-                    name_prefix,
-                    password_prefix,
-                    is_ghost,
-                    i+1
-                )
-                futures.append(future)
-            
-            for future in as_completed(futures):
-                result = future.result(timeout=10)
-                if result:
-                    results.append(result)
-        
-        elapsed = time.time() - start_time
-        
-        return jsonify({
-            'success': True,
-            'total_generated': len(results),
-            'total_requested': account_count,
-            'time_elapsed': round(elapsed, 2),
-            'speed': round(len(results)/elapsed, 2) if elapsed > 0 else 0,
-            'accounts': results
-        }), 200
-        
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/api/generate/single', methods=['POST'])
-def generate_single():
-    """Generate a single account"""
-    try:
-        data = request.json
-        region = data.get('region', 'ID')
-        name_prefix = data.get('name_prefix', 'OMHP')
-        password_prefix = data.get('password_prefix', 'OMHP')
-        is_ghost = region.upper() == 'GHOST'
-        
-        result = generate_single_account_api(
-            region if not is_ghost else 'BD',
-            name_prefix,
-            password_prefix,
-            is_ghost,
-            1
-        )
-        
-        if result:
-            return jsonify({'success': True, 'account': result}), 200
-        else:
-            return jsonify({'success': False, 'error': 'Failed to generate account'}), 500
-            
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/api/accounts', methods=['GET'])
-def get_accounts():
-    """Get all generated accounts from memory"""
-    try:
-        account_type = request.args.get('type', 'all')
-        
-        all_accounts = []
-        
-        if account_type == 'all':
-            all_accounts.extend(accounts_storage['normal'])
-            all_accounts.extend(accounts_storage['rare'])
-            all_accounts.extend(accounts_storage['ghost'])
-        elif account_type == 'normal':
-            all_accounts = accounts_storage['normal']
-        elif account_type == 'rare':
-            all_accounts = accounts_storage['rare']
-        elif account_type == 'couples':
-            all_accounts = accounts_storage['couples']
-        elif account_type == 'ghost':
-            all_accounts = accounts_storage['ghost']
-        
-        return jsonify({
-            'success': True,
-            'count': len(all_accounts),
-            'accounts': all_accounts
-        }), 200
-        
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/api/stats', methods=['GET'])
-def get_stats():
-    """Get generation statistics"""
-    try:
-        stats = {
-            'total_normal': len(accounts_storage['normal']),
-            'total_rare': len(accounts_storage['rare']),
-            'total_couples': len(accounts_storage['couples']),
-            'total_ghost': len(accounts_storage['ghost']),
-            'total_accounts': len(accounts_storage['normal']) + len(accounts_storage['rare']) + len(accounts_storage['ghost']),
-            'timestamp': datetime.now().isoformat()
-        }
-        
-        return jsonify(stats), 200
-        
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/api/clear', methods=['DELETE'])
-def clear_accounts():
-    """Clear all stored accounts (memory only)"""
-    try:
-        accounts_storage['normal'] = []
-        accounts_storage['rare'] = []
-        accounts_storage['couples'] = []
-        accounts_storage['ghost'] = []
-        COUPLES_DATA.clear()
-        
-        return jsonify({'success': True, 'message': 'All accounts cleared'}), 200
-        
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/api/regions', methods=['GET'])
-def get_regions():
-    """Get available regions"""
-    regions = ['ME', 'IND', 'ID', 'VN', 'TH', 'BD', 'PK', 'TW', 'CIS', 'SAC', 'BR', 'GHOST']
-    return jsonify({'regions': regions}), 200
-
+# ==================== GENERATE FUNCTION ====================
 def generate_single_account_api(region, name_prefix, password_prefix, is_ghost, seq_num):
-    """Generate a single account"""
+    """Generate a single account dengan semua fungsi lengkap"""
     try:
         account_result = create_account(region, name_prefix, password_prefix, is_ghost)
         
@@ -634,9 +488,9 @@ def generate_single_account_api(region, name_prefix, password_prefix, is_ghost, 
         if is_ghost:
             accounts_storage['ghost'].append(account_result)
         
-        # Clean response (remove sensitive data if needed)
+        # Clean response (hide full JWT)
         response_account = account_result.copy()
-        if 'jwt_token' in response_account:
+        if 'jwt_token' in response_account and response_account['jwt_token']:
             response_account['jwt_token'] = response_account['jwt_token'][:50] + '...' if len(response_account['jwt_token']) > 50 else response_account['jwt_token']
         
         return response_account
@@ -644,13 +498,195 @@ def generate_single_account_api(region, name_prefix, password_prefix, is_ghost, 
     except Exception as e:
         return None
 
-# ==================== HEALTH CHECK ====================
+# ==================== API ENDPOINTS ====================
+
+@app.route('/api/generate', methods=['POST'])
+def generate_accounts():
+    """Generate multiple accounts"""
+    try:
+        data = request.json or {}
+        
+        region = data.get('region', 'ID')
+        name_prefix = data.get('name_prefix', 'OMHP')
+        password_prefix = data.get('password_prefix', 'OMHP')
+        account_count = min(data.get('count', 5), 10)  # Max 10 for Vercel
+        thread_count = min(data.get('threads', 3), OPTIMIZATION['max_workers'])
+        is_ghost = region.upper() == 'GHOST'
+        
+        valid_regions = ['ME', 'IND', 'ID', 'VN', 'TH', 'BD', 'PK', 'TW', 'CIS', 'SAC', 'BR']
+        if not is_ghost and region.upper() not in valid_regions:
+            return jsonify({'error': f'Invalid region. Valid: {valid_regions + ["GHOST"]}'}), 400
+        
+        results = []
+        start_time = time.time()
+        
+        # Sequential lebih stabil untuk Vercel
+        for i in range(account_count):
+            result = generate_single_account_api(
+                region if not is_ghost else 'BD',
+                name_prefix,
+                password_prefix,
+                is_ghost,
+                i+1
+            )
+            if result:
+                results.append(result)
+        
+        elapsed = time.time() - start_time
+        
+        return jsonify({
+            'success': True,
+            'total_generated': len(results),
+            'total_requested': account_count,
+            'time_elapsed': round(elapsed, 2),
+            'speed': round(len(results)/elapsed, 2) if elapsed > 0 else 0,
+            'accounts': results
+        }), 200
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/generate/single', methods=['POST'])
+def generate_single():
+    """Generate single account dengan semua proses (guest register → get token → major register → major login → choose region)"""
+    try:
+        data = request.json or {}
+        region = data.get('region', 'ID')
+        name_prefix = data.get('name_prefix', 'OMHP')
+        password_prefix = data.get('password_prefix', 'OMHP')
+        is_ghost = region.upper() == 'GHOST'
+        
+        result = generate_single_account_api(
+            region if not is_ghost else 'BD',
+            name_prefix,
+            password_prefix,
+            is_ghost,
+            1
+        )
+        
+        if result:
+            return jsonify({'success': True, 'account': result}), 200
+        else:
+            return jsonify({'success': False, 'error': 'Failed to generate account - possible network issue'}), 500
+            
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/accounts', methods=['GET'])
+def get_accounts():
+    """Get all generated accounts"""
+    try:
+        account_type = request.args.get('type', 'all')
+        
+        all_accounts = []
+        
+        if account_type == 'all':
+            all_accounts.extend(accounts_storage['normal'])
+            all_accounts.extend(accounts_storage['rare'])
+            all_accounts.extend(accounts_storage['ghost'])
+        elif account_type == 'normal':
+            all_accounts = accounts_storage['normal']
+        elif account_type == 'rare':
+            all_accounts = accounts_storage['rare']
+        elif account_type == 'couples':
+            all_accounts = accounts_storage['couples']
+        elif account_type == 'ghost':
+            all_accounts = accounts_storage['ghost']
+        
+        return jsonify({
+            'success': True,
+            'count': len(all_accounts),
+            'accounts': all_accounts[-100:]  # Last 100 only
+        }), 200
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/stats', methods=['GET'])
+def get_stats():
+    """Get statistics"""
+    try:
+        stats = {
+            'total_normal': len(accounts_storage['normal']),
+            'total_rare': len(accounts_storage['rare']),
+            'total_couples': len(accounts_storage['couples']),
+            'total_ghost': len(accounts_storage['ghost']),
+            'total_accounts': len(accounts_storage['normal']) + len(accounts_storage['rare']) + len(accounts_storage['ghost']),
+            'timestamp': datetime.now().isoformat()
+        }
+        
+        return jsonify(stats), 200
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/clear', methods=['DELETE'])
+def clear_accounts():
+    """Clear all accounts"""
+    try:
+        accounts_storage['normal'] = []
+        accounts_storage['rare'] = []
+        accounts_storage['couples'] = []
+        accounts_storage['ghost'] = []
+        COUPLES_DATA.clear()
+        
+        return jsonify({'success': True, 'message': 'All accounts cleared'}), 200
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/regions', methods=['GET'])
+def get_regions():
+    """Get available regions"""
+    regions = ['ME', 'IND', 'ID', 'VN', 'TH', 'BD', 'PK', 'TW', 'CIS', 'SAC', 'BR', 'GHOST']
+    return jsonify({'regions': regions}), 200
+
+@app.route('/api/test', methods=['GET'])
+def test_connection():
+    """Test all endpoints connectivity"""
+    results = {
+        'guest_register': False,
+        'token_grant': False,
+        'major_register': False,
+        'major_login': False,
+        'choose_region': False
+    }
+    
+    try:
+        # Test guest register
+        url = "https://100067.connect.garena.com/api/v2/oauth/guest:register"
+        resp = requests.post(url, json={"app_id": 100067, "client_type": 2}, timeout=5)
+        results['guest_register'] = resp.status_code == 200
+    except:
+        pass
+    
+    try:
+        # Test token endpoint
+        url = "https://100067.connect.garena.com/oauth/guest/token/grant"
+        resp = requests.post(url, timeout=5)
+        results['token_grant'] = resp.status_code in [200, 400]
+    except:
+        pass
+    
+    return jsonify({
+        'connectivity': results,
+        'vercel_environment': True,
+        'timestamp': datetime.now().isoformat()
+    }), 200
+
 @app.route('/health', methods=['GET'])
 def health_check():
     return jsonify({
         'status': 'healthy',
         'timestamp': datetime.now().isoformat(),
-        'version': '5.0',
+        'version': '5.0-vercel-full',
+        'functions': {
+            'guest_register': 'available',
+            'get_token': 'available',
+            'major_register': 'available',
+            'major_login': 'available',
+            'choose_region': 'available'
+        },
         'storage': {
             'normal': len(accounts_storage['normal']),
             'rare': len(accounts_storage['rare']),
@@ -662,31 +698,35 @@ def health_check():
 @app.route('/', methods=['GET'])
 def index():
     return jsonify({
-        'name': 'OMHP Account Generator API',
+        'name': 'OMHP Account Generator API (Full Version)',
         'version': '5.0',
-        'description': 'Free Fire account generator API for Vercel',
+        'description': 'Complete Free Fire account generator with major_login, major_register, JWT token, and choose region',
+        'flows': [
+            '1. Guest Register → Get UID',
+            '2. Get Token → OpenID + Access Token',
+            '3. Major Register → Create Account',
+            '4. Major Login → Get JWT + Account ID',
+            '5. Choose Region → Force Region Bind'
+        ],
         'endpoints': {
-            'POST /api/generate': 'Generate multiple accounts',
-            'POST /api/generate/single': 'Generate single account',
-            'GET /api/accounts': 'Get generated accounts',
-            'GET /api/stats': 'Get statistics',
+            'POST /api/generate': 'Generate multiple accounts (max 10)',
+            'POST /api/generate/single': 'Generate single account (full flow)',
+            'GET /api/accounts': 'View generated accounts',
+            'GET /api/stats': 'View statistics',
             'DELETE /api/clear': 'Clear all accounts',
-            'GET /api/regions': 'Get available regions',
+            'GET /api/test': 'Test connectivity',
+            'GET /api/regions': 'Available regions',
             'GET /health': 'Health check'
         },
         'limits': {
-            'max_accounts_per_request': 100,
-            'max_threads': 10,
+            'max_accounts_per_request': 10,
+            'timeout': '8 seconds',
             'storage': 'in-memory (volatile)'
         }
     }), 200
 
 # ==================== VERCEL HANDLER ====================
 app.debug = False
-
-# Untuk Vercel
-def handler(event, context):
-    return app(event, context)
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
